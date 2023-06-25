@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+
+# pylint: disable=redefined-outer-name,subprocess-run-check
+# pylint: disable=too-many-branches,too-many-locals,too-many-statements
+# pylint: disable=invalid-name,consider-using-with
+
+"""psnap provides rsync-based backups."""
+
+import os
+import sys
+import shlex
+import argparse
+import datetime
+import subprocess
+import configparser
+
+# globals
+intervals = ["hourly", "daily", "weekly", "monthly"]
+lockdir = "/var/run/psnap/"
+
+# load config
+def load_config(configfile):
+    """Function loading config file."""
+    if not os.path.exists(configfile):
+        error("config file not found: " + configfile)
+        sys.exit(1)
+    config = configparser.ConfigParser()
+    try:
+        config.read(configfile)
+    except configparser.Error:
+        error("invalid config file: " + configfile)
+        sys.exit(1)
+    confdir = os.path.abspath(config["DEFAULT"]["confdir"]) + "/"
+    if args.group:
+        # loads specified fragments only
+        groups = args.group.split(",")
+        for fragment in groups:
+            fragment = confdir + fragment + ".conf"
+            if os.path.exists(fragment):
+                try:
+                    config.read(fragment)
+                except configparser.Error:
+                    error("invalid config fragment " + fragment)
+                    sys.exit(1)
+            else:
+                error("can not found config fragment " + fragment)
+                sys.exit(1)
+    else:
+        # load all config fragments
+        if os.path.exists(confdir):
+            for fragment in os.listdir(confdir):
+                fragment = confdir + fragment
+                if fragment.endswith(".conf"):
+                    try:
+                        config.read(fragment)
+                    except configparser.Error:
+                        error("ignoring invalid config fragment " + fragment)
+    return config
+
+
+# return timestamp
+def get_timestamp():
+    """Function returning a formatted timestamp."""
+    return "[" + datetime.datetime.now().isoformat() + "] "
+
+
+# log to file
+def logtofile(msg):
+    """Function logging to file."""
+    if not log:
+        return
+    log.write(msg + "\n")
+    log.flush()
+
+
+# print error on stderr
+def error(msg):
+    """Function printing error message on stderr."""
+    timestamp = get_timestamp()
+    if isinstance(msg, bytes):
+        msg = msg.decode()
+    msg = timestamp + msg.rstrip()
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+    logtofile(msg)
+
+
+# print message if verbose
+def message(msg):
+    """Function printing message to stdout if verbose on."""
+    timestamp = get_timestamp()
+    if isinstance(msg, bytes):
+        msg = msg.decode()
+    msg = timestamp + msg
+    logtofile(msg)
+    if verbose:
+        print(msg)
+
+
+# escape cmd
+def escape(cmd):
+    """Function escaping command list."""
+    # RHEL 7.x lacks shlex.join
+    if isinstance(cmd, str):
+        cmd = shlex.quote(cmd)
+    elif "join" in dir(shlex):
+        cmd = shlex.join(cmd)
+    else:
+        escaped = []
+        for token in cmd:
+            escaped.append(shlex.quote(token))
+        cmd = " ".join(escaped)
+    return cmd
+
+
+# execute command
+def execute(cmd, user="root", host="localhost", efilter=False):
+    """Function executing the provided command."""
+    # check if remote execution is needed
+    if host != "localhost":
+        cmd = ["ssh", user + "@" + host] + [cmd]
+    # print cmd
+    if isinstance(cmd, str):
+        message(cmd)
+    else:
+        message(escape(cmd))
+    if dry:
+        return 0
+    # if cmd is a string, invoke a shell
+    shell = isinstance(cmd, str)
+    result = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell
+    )
+    # error filter and logging
+    if result.returncode:
+        if cmd[0] == "rsync" and str(result.returncode) in efilter:
+            result.returncode = 0
+        else:
+            error(result.stderr)
+    if result.stdout:
+        message(result.stdout)
+    return result
+
+
+# create dst dist
+def create_dir(dst):
+    """Function creating specified dir."""
+    cmd = ["mkdir", "-p", dst, "-m", "0700"]
+    result = execute(cmd)
+    if result and result.returncode:
+        error("fatal error while creating dir " + dst + ", aborting...")
+        sys.exit(1)
+
+
+# rotate snapshots
+# return 0 means rotation only
+# return 1 means rsync needed
+def rotate(host, reflink):
+    """Function rotating snapshots.
+    Returns 0 if rsync is not needed, 1 if rsync is needed."""
+    prev_rotate = 0
+    snapdir = get_snapdir(host)
+    curr_interval = args.interval
+    # if resync, skip rotation
+    if args.resync:
+        dst = snapdir + curr_interval + ".0"
+        create_dir(dst)
+        return 1
+    # identify latests previous interval snapshot
+    curr_count = int(config[host][curr_interval])
+    index = intervals.index(curr_interval)
+    if index:
+        prev_interval = intervals[index - 1]
+        prev_count = int(config[host][prev_interval])
+    else:
+        prev_interval = intervals[index]
+        prev_count = 0
+    snaps = range(curr_count - 1, -1, -1)
+    # check if latest previous interval snapshot actually exists
+    # if so, rotation is needed
+    prev_snap = snapdir + prev_interval + "." + str(prev_count - 1)
+    if prev_count:
+        if os.path.exists(prev_snap):
+            prev_rotate = 1
+        else:
+            message(prev_snap + " not found, nothing to do")
+    for snap in snaps:
+        src = snapdir + curr_interval + "." + str(snap)
+        dst = snapdir + curr_interval + "." + str(snap + 1)
+        # skip non-existing snapshots
+        if not os.path.exists(src):
+            continue
+        # skip if prev rotation is not needed
+        if prev_count and not prev_rotate:
+            continue
+        # remove oldest snapshot
+        if snap == curr_count - 1:
+            cmd = ["rm", "-rf", src]
+            execute(cmd)
+        else:
+            # rotate non-oldest snapshots
+            cmd = ["mv", "-f", src, dst]
+            execute(cmd)
+    # rotate from previous interval snapshot
+    if prev_count:
+        if prev_rotate:
+            src = snapdir + prev_interval + "." + str(prev_count - 1)
+            dst = snapdir + curr_interval + ".0"
+            cmd = ["mv", "-f", src, dst]
+            execute(cmd)
+        return 0
+    # cp from latest snapshot
+    src = snapdir + curr_interval + ".1"
+    dst = snapdir + curr_interval + ".0"
+    if os.path.exists(src):
+        if reflink:
+            cmd = ["cp", "-a", "--reflink=always", src, dst]
+        else:
+            cmd = ["cp", "-al", src, dst]
+        execute(cmd)
+        cmd = ["touch", dst]
+        execute(cmd)
+    else:
+        create_dir(dst)
+    return 1
+
+
+# check if reflinks are supported
+def check_reflink(snapdir):
+    """Function checking if reflinks are supported."""
+    reflink = 0
+    src = snapdir + "testfile.txt"
+    dst = snapdir + "testfile.ref"
+    cmd = ["touch", src]
+    execute(cmd)
+    cmd = ["cp", "--reflink=always", src, dst]
+    result = execute(cmd)
+    if result and result.returncode:
+        reflink = 0
+    else:
+        reflink = 1
+    cmd = ["rm", "-f", src, dst]
+    execute(cmd)
+    return reflink
+
+
+# check if another backup process is running
+def check_lock(host):
+    """Function checking if another backup process is running."""
+    last_pid = 0
+    curr_pid = str(os.getpid())
+    lockfile = lockdir + host + ".pid"
+    create_dir(lockdir)
+    message("echo " + curr_pid + " > " + escape(lockfile))
+    if dry:
+        return last_pid
+    if os.path.exists(lockfile):
+        pid = open(lockfile, "r", encoding="utf-8")
+        last_pid = int(pid.readline().strip())
+    if last_pid:
+        try:
+            os.kill(last_pid, 0)
+        except OSError:
+            last_pid = 0
+    if not last_pid:
+        pid = open(lockfile, "w", encoding="utf-8")
+        pid.write(curr_pid + "\n")
+    else:
+        error("another backup with pid " + str(last_pid) + " is running, aborting...")
+    pid.close()
+    return last_pid
+
+
+# remove lock file
+def clear_lock(host):
+    """Function removing the pid file when finished."""
+    lockfile = lockdir + host + ".pid"
+    cmd = ["rm", "-f", lockfile]
+    execute(cmd)
+
+
+# check host list
+def check_hostlist():
+    """Function checking host list."""
+    if args.exclude and not set(args.exclude.split(",")).issubset(config.sections()):
+        error("no such hosts found")
+        return False
+    if args.include and not set(args.include.split(",")).issubset(config.sections()):
+        error("no such hosts found")
+        return False
+    return True
+
+
+# check host
+def check_host(host):
+    """Function checking single host."""
+    count = int(config[host][args.interval])
+    enabled = int(config[host]["enabled"])
+    # if excluded, skip
+    if args.exclude:
+        if host in args.exclude.split(","):
+            return False
+    # if not included, skip
+    if args.include:
+        if host not in args.include.split(","):
+            return False
+    else:
+        if not enabled:
+            message("skipping disabled host " + host)
+            return False
+    # if count is zero, skip
+    if not count:
+        message("skipping inactive host " + host)
+        return False
+    # invalid host should generate an error message
+    if not host.replace(".", "").isalnum():
+        error("skipping invalid host " + host)
+        return False
+    return True
+
+
+# mangle rsync options
+def mangle_options(host):
+    """Function mangling rsync options."""
+    if config[host]["options"][0] == "+":
+        options = (
+            config["DEFAULT"]["options"].split()
+            + config[host]["options"].lstrip("+").split()
+        )
+    else:
+        options = config[host]["options"].split()
+    # add -v to rsync if needed
+    if verbose > 1:
+        options.append("-v")
+    # if reflink supported, use --inplace
+    reflink = int(config[host]["reflink"])
+    if reflink:
+        if check_reflink(get_snapdir(host)):
+            reflink = 1
+            options.append("--inplace")
+            message("reflinks supported, using rsync --inplace")
+        else:
+            reflink = 0
+            error("reflinks not supported, switching back to hardlinks")
+    return (options, reflink)
+
+
+# get host-specific snapdir
+def get_snapdir(host):
+    """Function returning host-specific snapdir."""
+    return os.path.abspath(config[host]["snapdir"]) + "/" + host + "/"
+
+
+# prepare snapdir
+def prepare_snapdir(host):
+    """Function preparing snapdir."""
+    snapdir = get_snapdir(host)
+    if not os.path.exists(config[host]["snapdir"]):
+        create_dir(config[host]["snapdir"])
+    if not os.path.exists(snapdir):
+        create_dir(snapdir)
+
+
+# do backups for all required hosts
+def backup():
+    """Function executing the backup."""
+    exitcode = 0
+    global_timer_start = int(datetime.datetime.now().timestamp())
+    check_hostlist()
+    # iterate hosts
+    for host in config.sections():
+        if not check_host(host):
+            continue
+        # host is valid
+        hosterror = 0
+        host_timer_start = int(datetime.datetime.now().timestamp())
+        # import host options
+        before = config[host]["before"]
+        after = config[host]["after"]
+        sep = config[host]["sep"]
+        efilter = config[host]["efilter"].split()
+        snapdir = get_snapdir(host)
+        user = config[host]["user"]
+        folders = config[host]["folder"].split(sep)
+        stripws = int(config[host]["stripws"])
+        retry = int(config[host]["retry"])
+        mode = config[host]["mode"]
+        pwdfile = config[host]["pwdfile"]
+        message("starting backup for host " + host + " with pid " + str(os.getpid()))
+        if check_lock(host):
+            continue
+        prepare_snapdir(host)
+        (options, reflink) = mangle_options(host)
+        # rotate snapshots
+        # if rsyns is not needed, continue to next folder
+        if not rotate(host, reflink):
+            host_timer_stop = int(datetime.datetime.now().timestamp())
+            delta = str(host_timer_stop - host_timer_start)
+            message("finished backup for host " + host + " (duration: " + delta + "s)")
+            continue
+        # execute before script
+        if before:
+            result = execute(before, user, host)
+            if result and result.returncode:
+                hosterror = 1
+                exitcode = 1
+        # rsync operating mode (ssh vs server)
+        if mode == "ssh":
+            rsyncsep = ":"
+        else:
+            options = options + ["--password-file", pwdfile]
+            rsyncsep = "::"
+        # iterate folders
+        for folder in folders:
+            cmd = ["rsync"] + options
+            if stripws:
+                folder = folder.strip()
+            if host == "localhost":
+                cmd = cmd + [folder, snapdir + args.interval + ".0/data/"]
+            else:
+                cmd = cmd + [
+                    user + "@" + host + rsyncsep + folder,
+                    snapdir + args.interval + ".0/data/",
+                ]
+            # retry if needed
+            for __ in range(0, retry + 1):
+                syncerror = 0
+                result = execute(cmd, efilter=efilter)
+                if result and result.returncode:
+                    syncerror = 1
+                    continue
+                # stop retrying if no true error happened
+                break
+            # record exit code
+            if syncerror:
+                hosterror = 1
+                exitcode = 1
+        # after script
+        if after:
+            result = execute(after, user, host)
+            if result and result.returncode:
+                hosterror = 1
+                exitcode = 1
+        host_timer_stop = int(datetime.datetime.now().timestamp())
+        delta = str(host_timer_stop - host_timer_start)
+        clear_lock(host)
+        if hosterror:
+            error("error backing up host " + host + " (duration: " + delta + "s)")
+        else:
+            message("finished backup for host " + host + " (duration: " + delta + "s)")
+    # return exit code
+    global_timer_stop = int(datetime.datetime.now().timestamp())
+    delta = str(global_timer_stop - global_timer_start)
+    if dry:
+        message("dry run, nothing done (duration: " + delta + "s)")
+    else:
+        if exitcode:
+            error("completed with some errors (duration: " + delta + "s)")
+        else:
+            message("successfully completed all backups (duration: " + delta + "s)")
+    return exitcode
+
+
+# help
+parser = argparse.ArgumentParser(description="psnap is a backup program based on rsync")
+parser.add_argument("interval")
+parser.add_argument(
+    "-t",
+    "--test",
+    action="store_true",
+    help="only print the action plan, not doing anything - ie: dry run",
+)
+parser.add_argument(
+    "-v", "--verbose", action="count", default=0, help="run in verbose mode"
+)
+parser.add_argument(
+    "-i",
+    "--include",
+    action="store",
+    default=None,
+    help="only include specified (coma-separated) hosts",
+)
+parser.add_argument(
+    "-e",
+    "--exclude",
+    action="store",
+    default=None,
+    help="exclude specified (coma-separated) hosts",
+)
+parser.add_argument(
+    "-c",
+    "--config",
+    action="store",
+    default="/etc/psnap.conf",
+    help="use alternate config file",
+)
+parser.add_argument(
+    "-g",
+    "--group",
+    action="store",
+    default=None,
+    help="include specified (coma-separated) groups only",
+)
+parser.add_argument(
+    "-r",
+    "--resync",
+    action="store_true",
+    help="resync with no rotate (you will probably need to add --include)",
+)
+args = parser.parse_args()
+
+# options parsing and program start
+log = False
+dry = args.test
+verbose = args.verbose
+if args.config:
+    configfile = args.config
+config = load_config(configfile)
+logfile = config["DEFAULT"]["logfile"]
+if dry:
+    verbose = 1
+else:
+    log = open(logfile, "a", encoding="utf-8")
+result = backup()
+# exit with error code
+if log:
+    log.close()
+sys.exit(result)
