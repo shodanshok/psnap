@@ -2,7 +2,7 @@
 
 # pylint: disable=redefined-outer-name,subprocess-run-check
 # pylint: disable=too-many-branches,too-many-locals,too-many-statements
-# pylint: disable=invalid-name,consider-using-with
+# pylint: disable=invalid-name,consider-using-with,global-statement
 
 """psnap provides rsync-based backups."""
 
@@ -62,7 +62,15 @@ def load_config(configfile):
 # return timestamp
 def get_timestamp():
     """Function returning a formatted timestamp."""
-    return "[" + datetime.datetime.now().isoformat() + "] "
+    return "[" + datetime.datetime.now().isoformat() + " #" + str(os.getpid()) + "] "
+
+
+# reopen log for multi processing
+def reopen_logfile(host):
+    """Function reopening per-backup logfile"""
+    global log
+    create_dir(logdir)
+    log = open(logdir + host + ".log", "a", encoding="utf-8")
 
 
 # log to file
@@ -146,6 +154,8 @@ def execute(cmd, user="root", host="localhost", efilter=False):
 # create dst dist
 def create_dir(dst):
     """Function creating specified dir."""
+    if os.path.exists(dst):
+        return
     cmd = ["mkdir", "-p", dst, "-m", "0700"]
     result = execute(cmd)
     if result and result.returncode:
@@ -198,14 +208,12 @@ def rotate(host, reflink):
         if snap == curr_count - 1:
             cmd = ["rm", "-rf", src]
             result = execute(cmd)
-            if result and result.returncode:
-                return 0
         else:
             # rotate non-oldest snapshots
             cmd = ["mv", "-f", src, dst]
             result = execute(cmd)
-            if result and result.returncode:
-                return 0
+        if result and result.returncode:
+            return 0
     # rotate from previous interval snapshot
     if prev_count:
         if prev_rotate:
@@ -372,8 +380,10 @@ def prepare_snapdir(host):
 
 # execute single-host backup
 def backup_host(host):
+    """Function backing up a single host"""
     # host is valid
-    success = True
+    hosterror = False
+    reopen_logfile(host)
     host_timer_start = int(datetime.datetime.now().timestamp())
     # import host options
     before = config[host]["before"]
@@ -389,7 +399,7 @@ def backup_host(host):
     pwdfile = config[host]["pwdfile"]
     message("starting backup for host " + host + " with pid " + str(os.getpid()))
     if check_lock(host):
-        return False
+        return True
     prepare_snapdir(host)
     (options, reflink) = mangle_options(host)
     # rotate snapshots
@@ -397,17 +407,17 @@ def backup_host(host):
     rotation = rotate(host, reflink)
     if not rotation:
         error("error backing up host " + host + " (duration: 0s)")
-        return False
+        return True
     if rotation == 1:
         host_timer_stop = int(datetime.datetime.now().timestamp())
         delta = str(host_timer_stop - host_timer_start)
         message("finished backup for host " + host + " (duration: " + delta + "s)")
-        return True
+        return False
     # execute before script
     if before:
         result = execute(before, user, host)
         if result and result.returncode:
-            success = False
+            hosterror = True
     # rsync operating mode (ssh vs server)
     if mode == "ssh":
         rsyncsep = ":"
@@ -428,43 +438,62 @@ def backup_host(host):
             ]
         # retry if needed
         for __ in range(0, retry + 1):
-            sync = True
+            syncerror = False
             result = execute(cmd, efilter=efilter)
             if result and result.returncode:
-                sync = False
+                syncerror = True
                 continue
             # stop retrying if no true error happened
             break
         # record exit code
-        if not sync:
-            success = False
+        if syncerror:
+            hosterror = True
     # after script
     if after:
         result = execute(after, user, host)
         if result and result.returncode:
-            success = False
+            hosterror = True
     host_timer_stop = int(datetime.datetime.now().timestamp())
     delta = str(host_timer_stop - host_timer_start)
     clear_lock(host)
-    if success:
-        message("finished backup for host " + host + " (duration: " + delta + "s)")
-    else:
+    if hosterror:
         error("error backing up host " + host + " (duration: " + delta + "s)")
-    return success
+    else:
+        message("finished backup for host " + host + " (duration: " + delta + "s)")
+    if args.multi:
+        sys.exit(hosterror)
+    else:
+        return hosterror
 
 
 # do backups for all required hosts
 def backup():
     """Function executing the backup."""
     exitcode = 0
+    processes = []
     timer_start = int(datetime.datetime.now().timestamp())
     check_hostlist()
+    if args.multi:
+        message("starting concurrent backups, logs in " + logfile + " and " + logdir)
+    else:
+        message("starting backups, logs in " + logfile)
     # iterate hosts
     for host in config.sections():
         if not check_host(host):
             continue
-        if not backup_host(host):
-            exitcode = 1
+        if args.multi:
+            p = multiprocessing.Process(target=backup_host, args=(host,))
+            p.start()
+            processes.append(p)
+        else:
+            if backup_host(host):
+                exitcode = 1
+    # if needed, join the other processes and grab the exit code
+    if args.multi:
+        for p in processes:
+            p.join()
+            if p.exitcode:
+                exitcode = p.exitcode
     # return exit code
     timer_stop = int(datetime.datetime.now().timestamp())
     delta = str(timer_stop - timer_start)
@@ -540,6 +569,7 @@ if args.config:
     configfile = args.config
 config = load_config(configfile)
 logfile = config["DEFAULT"]["logfile"]
+logdir = os.path.dirname(logfile) + "/psnap/"
 if dry:
     verbose = 1
 else:
