@@ -472,6 +472,7 @@ def backup_host(host):
 def backup():
     """Function executing the backup."""
     exitcode = 0
+    errors = []
     processes = []
     timer_start = int(datetime.datetime.now().timestamp())
     check_hostlist()
@@ -486,17 +487,20 @@ def backup():
             continue
         if args.multi:
             p = multiprocessing.Process(target=backup_host, args=(host,))
+            p.name = host
             p.start()
             processes.append(p)
         else:
             if backup_host(host):
                 exitcode = 1
+                errors.append(host)
     # if needed, join the other processes and grab the exit code
     if args.multi:
         for p in processes:
             p.join()
             if p.exitcode:
                 exitcode = p.exitcode
+                errors.append(p.name)
     # return exit code
     timer_stop = int(datetime.datetime.now().timestamp())
     delta = str(timer_stop - timer_start)
@@ -504,7 +508,8 @@ def backup():
         message("dry run, nothing done (duration: " + delta + "s)")
     else:
         if exitcode:
-            error("completed with some errors (duration: " + delta + "s)")
+            errors = str(errors)
+            error("completed with some errors (duration: " + delta + "s) for " + errors)
         else:
             message("successfully completed all backups (duration: " + delta + "s)")
     return exitcode
