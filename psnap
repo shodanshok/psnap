@@ -69,6 +69,8 @@ def get_timestamp():
 def reopen_logfile(host):
     """Function reopening per-backup logfile"""
     global log
+    if dry:
+        return
     create_dir(logdir)
     log = open(logdir + host + ".log", "a", encoding="utf-8")
 
