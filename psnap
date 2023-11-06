@@ -558,7 +558,7 @@ parser.add_argument(
     "-m",
     "--multi",
     action="store_true",
-    help="do a parallel/concurrent backup",
+    help="do parallel/concurrent backups",
 )
 args = parser.parse_args()
 
