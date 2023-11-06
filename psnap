@@ -474,6 +474,7 @@ def backup():
     timer_start = int(datetime.datetime.now().timestamp())
     check_hostlist()
     if args.multi:
+        multiprocessing.set_start_method("fork")
         message("starting concurrent backups, logs in " + logfile + " and " + logdir)
     else:
         message("starting backups, logs in " + logfile)
