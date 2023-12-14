@@ -331,10 +331,6 @@ def check_host(host):
     if not count:
         message("skipping inactive host " + host)
         return False
-    # invalid host should generate an error message
-    if not host.replace(".", "").isalnum():
-        error("skipping invalid host " + host)
-        return False
     return True
 
 
@@ -385,7 +381,8 @@ def backup_host(host):
     """Function backing up a single host"""
     # host is valid
     hosterror = False
-    reopen_logfile(host)
+    if args.multi:
+        reopen_logfile(host)
     host_timer_start = int(datetime.datetime.now().timestamp())
     # import host options
     before = config[host]["before"]
@@ -398,7 +395,14 @@ def backup_host(host):
     stripws = int(config[host]["stripws"])
     retry = int(config[host]["retry"])
     mode = config[host]["mode"]
+    port = config[host]["port"]
     pwdfile = config[host]["pwdfile"]
+    # use explicit ip address if provided
+    try:
+        ipaddr = config[host]["ipaddr"]
+    except KeyError:
+        ipaddr = host
+    # starting backup
     message("starting backup for host " + host + " with pid " + str(os.getpid()))
     if check_lock(host):
         return True
@@ -423,20 +427,33 @@ def backup_host(host):
     # rsync operating mode (ssh vs server)
     if mode == "ssh":
         rsyncsep = ":"
+        if port != "default":
+            options = options + ["--rsh", "ssh -p "+port]
     else:
-        options = options + ["--password-file", pwdfile]
         rsyncsep = "::"
+        options = options + ["--password-file", pwdfile]
+        if port != "default":
+            options = options + ["--port", port]
     # iterate folders
     for folder in folders:
-        cmd = ["rsync"] + options
         if stripws:
             folder = folder.strip()
+        if not folder:
+            message("skipping blank folder " + folder)
+            continue
+        # define rsync module if required
+        if mode == "ssh":
+            module = ""
+        else:
+            module = folder.split("/")[0]+"/"
+        # build command
+        cmd = ["rsync"] + options
         if host == "localhost":
             cmd = cmd + [folder, snapdir + args.interval + ".0/data/"]
         else:
             cmd = cmd + [
-                user + "@" + host + rsyncsep + folder,
-                snapdir + args.interval + ".0/data/",
+                user + "@" + ipaddr + rsyncsep + folder,
+                snapdir + args.interval + ".0/data/" + module,
             ]
         # retry if needed
         for __ in range(0, retry + 1):
