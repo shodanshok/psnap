@@ -608,7 +608,7 @@ parser.add_argument(
     help="disable ssh strict host checking",
 )
 parser.add_argument(
-    "-L",
+    "-s",
     "--mlogs",
     action="store_true",
     help="use dedicated per-hostname log file (in addition to the main one)",
