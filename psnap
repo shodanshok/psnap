@@ -429,11 +429,11 @@ def backup_host(host):
         rsyncsep = ":"
         sshopt = ""
         if port != "default":
-            sshopt = sshopt+" -p "+port
+            sshopt = sshopt + " -p " + port
         if args.nokeycheck:
-            sshopt = sshopt+" -o StrictHostKeyChecking=no"
+            sshopt = sshopt + " -o StrictHostKeyChecking=no"
         if sshopt.lstrip():
-            options = options + ["--rsh", "ssh "+sshopt.lstrip()]
+            options = options + ["--rsh", "ssh " + sshopt.lstrip()]
     else:
         rsyncsep = "::"
         options = options + ["--password-file", pwdfile]
@@ -450,7 +450,7 @@ def backup_host(host):
         if mode == "ssh":
             module = ""
         else:
-            module = folder.split("/")[0]+"/"
+            module = folder.split("/")[0] + "/"
         # build command
         cmd = ["rsync"] + options
         if host == "localhost":
