@@ -65,6 +65,15 @@ def get_timestamp():
     return "[" + datetime.datetime.now().isoformat() + " #" + str(os.getpid()) + "] "
 
 
+# open log file
+def open_logfile():
+    """Function opening main log file"""
+    global log
+    if dry:
+        return
+    log = open(logfile, "a", encoding="utf-8")
+
+
 # reopen log for multi processing
 def reopen_logfile(host):
     """Function reopening per-backup logfile"""
@@ -381,7 +390,7 @@ def backup_host(host):
     """Function backing up a single host"""
     # host is valid
     hosterror = False
-    if args.multi:
+    if args.mlogs:
         reopen_logfile(host)
     host_timer_start = int(datetime.datetime.now().timestamp())
     # import host options
@@ -498,11 +507,12 @@ def backup():
     processes = []
     timer_start = int(datetime.datetime.now().timestamp())
     check_hostlist()
-    if args.multi:
-        multiprocessing.set_start_method("fork")
+    if args.mlogs:
         message("starting concurrent backups, logs in " + logfile + " and " + logdir)
     else:
-        message("starting backups, logs in " + logfile)
+        message("starting backups")
+    if args.multi:
+        multiprocessing.set_start_method("fork")
     # iterate hosts
     for host in config.sections():
         if not check_host(host):
@@ -523,9 +533,11 @@ def backup():
             if p.exitcode:
                 exitcode = p.exitcode
                 errors.append(p.name)
-    # return exit code
+    # log global results and return exit code
     timer_stop = int(datetime.datetime.now().timestamp())
     delta = str(timer_stop - timer_start)
+    if log and (log.name != logfile):
+        open_logfile()
     if dry:
         message("dry run, nothing done (duration: " + delta + "s)")
     else:
@@ -587,7 +599,7 @@ parser.add_argument(
     "-m",
     "--multi",
     action="store_true",
-    help="do parallel/concurrent backups",
+    help="do parallel/concurrent backups (implies mlogs)",
 )
 parser.add_argument(
     "-k",
@@ -595,23 +607,28 @@ parser.add_argument(
     action="store_true",
     help="disable ssh strict host checking",
 )
+parser.add_argument(
+    "-L",
+    "--mlogs",
+    action="store_true",
+    help="use dedicated per-hostname log file (in addition to the main one)",
+)
 args = parser.parse_args()
 
 # options parsing and program start
 log = False
 dry = args.test
+if dry:
+    verbose = 1
 verbose = args.verbose
+if args.multi:
+    args.mlogs = 1
 if args.config:
     configfile = args.config
 config = load_config(configfile)
 logfile = config["DEFAULT"]["logfile"]
 logdir = os.path.dirname(logfile) + "/psnap/"
-if dry:
-    verbose = 1
-else:
-    log = open(logfile, "a", encoding="utf-8")
+open_logfile()
 result = backup()
 # exit with error code
-if log:
-    log.close()
 sys.exit(result)
