@@ -427,8 +427,13 @@ def backup_host(host):
     # rsync operating mode (ssh vs server)
     if mode == "ssh":
         rsyncsep = ":"
+        sshopt = ""
         if port != "default":
-            options = options + ["--rsh", "ssh -p "+port]
+            sshopt = sshopt+" -p "+port
+        if args.nokeycheck:
+            sshopt = sshopt+" -o StrictHostKeyChecking=no"
+        if sshopt.lstrip():
+            options = options + ["--rsh", "ssh "+sshopt.lstrip()]
     else:
         rsyncsep = "::"
         options = options + ["--password-file", pwdfile]
@@ -583,6 +588,12 @@ parser.add_argument(
     "--multi",
     action="store_true",
     help="do parallel/concurrent backups",
+)
+parser.add_argument(
+    "-k",
+    "--nokeycheck",
+    action="store_true",
+    help="disable ssh strict host checking",
 )
 args = parser.parse_args()
 
