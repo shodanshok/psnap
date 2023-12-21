@@ -134,7 +134,7 @@ def escape(cmd):
 
 
 # execute command
-def execute(cmd, user="root", host="localhost", efilter=False):
+def execute(cmd, user="root", host="localhost", efilter=False, lastrun=True):
     """Function executing the provided command."""
     # check if remote execution is needed
     if host != "localhost":
@@ -156,7 +156,10 @@ def execute(cmd, user="root", host="localhost", efilter=False):
         if cmd[0] == "rsync" and str(result.returncode) in efilter:
             result.returncode = 0
         else:
-            error(result.stderr)
+            if lastrun:
+                error(result.stderr)
+            else:
+                message(result.stderr.rstrip())
     if result.stdout:
         message(result.stdout)
     return result
@@ -470,9 +473,13 @@ def backup_host(host):
                 snapdir + args.interval + ".0/data/" + module,
             ]
         # retry if needed
-        for __ in range(0, retry + 1):
+        for runid in range(0, retry + 1):
             syncerror = False
-            result = execute(cmd, efilter=efilter)
+            if runid == retry:
+                lastrun = True
+            else:
+                lastrun = False
+            result = execute(cmd, efilter=efilter, lastrun=lastrun)
             if result and result.returncode:
                 syncerror = True
                 continue
