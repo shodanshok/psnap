@@ -134,7 +134,7 @@ def escape(cmd):
 
 
 # execute command
-def execute(cmd, user="root", host="localhost", efilter=False, lastrun=True):
+def execute(cmd, user="root", host="localhost", efilter=False, retry=0):
     """Function executing the provided command."""
     # check if remote execution is needed
     if host != "localhost":
@@ -148,20 +148,24 @@ def execute(cmd, user="root", host="localhost", efilter=False, lastrun=True):
         return 0
     # if cmd is a string, invoke a shell
     shell = isinstance(cmd, str)
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell
-    )
-    # error filter and logging
-    if result.returncode:
+    # execute, multiple times if needed
+    for runid in range(0, retry + 1):
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell
+        )
+        if result.stdout:
+            message(result.stdout)
+        if result.stderr:
+            if runid < retry:
+                message(result.stderr.rstrip())
+            else:
+                error(result.stderr)
+        # error filter
         if cmd[0] == "rsync" and str(result.returncode) in efilter:
             result.returncode = 0
-        else:
-            if lastrun:
-                error(result.stderr)
-            else:
-                message(result.stderr.rstrip())
-    if result.stdout:
-        message(result.stdout)
+        # if no true error happened, stop now
+        if not result.returncode:
+            break
     return result
 
 
@@ -472,21 +476,9 @@ def backup_host(host):
                 user + "@" + ipaddr + rsyncsep + folder,
                 snapdir + args.interval + ".0/data/" + module,
             ]
-        # retry if needed
-        for runid in range(0, retry + 1):
-            syncerror = False
-            if runid == retry:
-                lastrun = True
-            else:
-                lastrun = False
-            result = execute(cmd, efilter=efilter, lastrun=lastrun)
-            if result and result.returncode:
-                syncerror = True
-                continue
-            # stop retrying if no true error happened
-            break
-        # record exit code
-        if syncerror:
+        # execute
+        result = execute(cmd, efilter=efilter, retry=retry)
+        if result and result.returncode:
             hosterror = True
     # after script
     if after:
