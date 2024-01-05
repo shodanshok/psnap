@@ -410,6 +410,7 @@ def backup_host(host):
     snapdir = get_snapdir(host)
     user = config[host]["user"]
     folders = config[host]["folder"].split(sep)
+    exclude = config[host]["exclude"].split(sep)
     stripws = int(config[host]["stripws"])
     retry = int(config[host]["retry"])
     mode = config[host]["mode"]
@@ -426,6 +427,11 @@ def backup_host(host):
         return True
     prepare_snapdir(host)
     (options, reflink) = mangle_options(host)
+    # exclude
+    for exclusion in exclude:
+        if stripws:
+            exclusion = exclusion.strip()
+        options = options + ["--exclude", exclusion]
     # rotate snapshots
     # if rsyns is not needed, return now
     rotation = rotate(host, reflink)
