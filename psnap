@@ -354,12 +354,11 @@ def check_host(host):
 def mangle_options(host):
     """Function mangling rsync options."""
     if config[host]["options"][0] == "+":
-        options = (
-            config["DEFAULT"]["options"].split()
-            + config[host]["options"].lstrip("+").split()
+        options = shlex.split(config["DEFAULT"]["options"]) + shlex.split(
+            config[host]["options"].lstrip("+")
         )
     else:
-        options = config[host]["options"].split()
+        options = shlex.split(config[host]["options"])
     # add -v to rsync if needed
     if verbose > 1:
         options.append("-v")
