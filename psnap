@@ -195,7 +195,7 @@ def rotate(host, reflink):
     if args.resync:
         dst = snapdir + curr_interval + ".0"
         create_dir(dst)
-        create_dir(dst+"/data")
+        create_dir(dst + "/data")
         return 2
     # identify latest previous interval snapshot
     curr_count = int(config[host][curr_interval])
@@ -259,7 +259,7 @@ def rotate(host, reflink):
         execute(cmd)
     else:
         create_dir(dst)
-        create_dir(dst+"/data")
+        create_dir(dst + "/data")
     return 2
 
 
@@ -431,7 +431,8 @@ def backup_host(host):
     for exclusion in exclude:
         if stripws:
             exclusion = exclusion.strip()
-        options = options + ["--exclude", exclusion]
+        if exclusion:
+            options = options + ["--exclude", exclusion]
     # rotate snapshots
     # if rsyns is not needed, return now
     rotation = rotate(host, reflink)
