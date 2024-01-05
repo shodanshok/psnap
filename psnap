@@ -174,6 +174,7 @@ def create_dir(dst):
     """Function creating specified dir."""
     if os.path.exists(dst):
         return
+    dst = dst.rstrip("/")
     cmd = ["mkdir", "-p", dst, "-m", "0700"]
     result = execute(cmd)
     if result and result.returncode:
@@ -194,6 +195,7 @@ def rotate(host, reflink):
     if args.resync:
         dst = snapdir + curr_interval + ".0"
         create_dir(dst)
+        create_dir(dst+"/data")
         return 2
     # identify latest previous interval snapshot
     curr_count = int(config[host][curr_interval])
@@ -257,6 +259,7 @@ def rotate(host, reflink):
         execute(cmd)
     else:
         create_dir(dst)
+        create_dir(dst+"/data")
     return 2
 
 
