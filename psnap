@@ -62,7 +62,7 @@ def load_config(configfile):
 # return timestamp
 def get_timestamp():
     """Function returning a formatted timestamp."""
-    return "[" + datetime.datetime.now().isoformat() + " #" + str(os.getpid()) + "] "
+    return "[" + datetime.datetime.now().isoformat() + "] "
 
 
 # open log file
