@@ -80,7 +80,6 @@ def reopen_logfile(host):
     global log
     if dry:
         return
-    create_dir(logdir)
     log = open(logdir + host + ".log", "a", encoding="utf-8")
 
 
@@ -526,6 +525,7 @@ def backup():
         if not check_host(host):
             continue
         if args.multi:
+            create_dir(logdir)
             p = multiprocessing.Process(target=backup_host, args=(host,))
             p.name = host
             p.start()
