@@ -152,8 +152,24 @@ def execute(cmd, user="root", host="localhost", efilter=False, retry=0):
         result = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell
         )
+        # print stdout with some rsync stats, if available
         if result.stdout:
-            message(result.stdout)
+            if cmd[0] == "rsync":
+                stats = result.stdout[-256:].decode("utf-8")
+                index = stats.rfind("\n\nsent")
+                if index < 0:
+                    index = stats.rfind("\nsent")
+                if index >= 0:
+                    stats = stats[index:].replace("\n", " ").strip()
+                    stats = stats.replace(" total", "  total")
+                    result.stdout = result.stdout[: -(256 - index)]
+                if result.stdout:
+                    message(result.stdout)
+                if stats:
+                    message(stats)
+            else:
+                message(result.stdout)
+        # error reporting
         if result.stderr:
             if runid < retry:
                 message(result.stderr.rstrip())
@@ -514,12 +530,12 @@ def backup():
     processes = []
     timer_start = int(datetime.datetime.now().timestamp())
     check_hostlist()
+    message("starting backups with command line: " + escape(sys.argv))
     if args.mlogs:
-        message("starting concurrent backups, logs in " + logfile + " and " + logdir)
+        message("logs in " + logfile + " and " + logdir)
         create_dir(logdir)
-    else:
-        message("starting backups")
     if args.multi:
+        message("concurrent backups enabled")
         multiprocessing.set_start_method("fork")
     # iterate hosts
     for host in config.sections():
@@ -553,7 +569,12 @@ def backup():
             errors = str(errors)
             error("completed with some errors (duration: " + delta + "s) for " + errors)
         else:
-            message("successfully completed all backups (duration: " + delta + "s)")
+            message(
+                "successfully completed all backups (duration: "
+                + delta
+                + "s) for command line: "
+                + escape(sys.argv)
+            )
     return exitcode
 
 
