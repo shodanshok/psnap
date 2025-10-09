@@ -211,6 +211,8 @@ def rotate(host, reflink):
         dst = snapdir + curr_interval + ".0"
         create_dir(dst)
         create_dir(dst + "/data")
+        cmd = ["touch", dst]
+        execute(cmd)
         return 2
     # identify latest previous interval snapshot
     curr_count = int(config[host][curr_interval])
