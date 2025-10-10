@@ -3,6 +3,7 @@
 # pylint: disable=redefined-outer-name,subprocess-run-check
 # pylint: disable=too-many-branches,too-many-locals,too-many-statements
 # pylint: disable=invalid-name,consider-using-with,global-statement
+# pylint: disable=too-many-return-statements
 
 """psnap provides rsync-based backups."""
 
@@ -18,6 +19,7 @@ import multiprocessing
 # globals
 intervals = ["hourly", "daily", "weekly", "monthly"]
 lockdir = "/var/run/psnap/"
+
 
 # load config
 def load_config(configfile):
@@ -210,13 +212,27 @@ def get_prev_snap(host, snapdir):
         return False
     return snapdir + prev_interval + "." + str(prev_count - 1)
 
+
+# get latest snapshot
+def get_last_snap(host, snapdir):
+    """Function returning latest snapshot."""
+    index = intervals.index(args.interval)
+    for interval in intervals[index:]:
+        count = int(config[host][interval])
+        snaps = range(0, count - 1, 1)
+        for snap in snaps:
+            snap = snapdir + interval + "." + str(snap)
+            if os.path.exists(snap):
+                return snap
+    return False
+
+
 # rotate snapshots
 # return 0 means rotation failed
 # return 1 means rotation only
 # return 2 means rsync needed
 def rotate(host, reflink):
     """Function rotating snapshots."""
-    prev_rotate = 0
     snapdir = get_snapdir(host)
     curr_interval = args.interval
     curr_count = int(config[host][curr_interval])
@@ -229,7 +245,7 @@ def rotate(host, reflink):
         execute(cmd)
         return 2
     prev_snap = get_prev_snap(host, snapdir)
-    # check if latest previous interval snapshot actually exists
+    # check if oldest previous interval snapshot actually exists
     prev_snap = get_prev_snap(host, snapdir)
     if prev_snap and not os.path.exists(prev_snap):
         message(prev_snap + " not found, nothing to do")
@@ -261,9 +277,9 @@ def rotate(host, reflink):
             return 0
         return 1
     # cp from latest snapshot
-    src = snapdir + curr_interval + ".1"
+    src = get_last_snap(host, snapdir)
     dst = snapdir + curr_interval + ".0"
-    if os.path.exists(src):
+    if src:
         if reflink:
             cmd = ["cp", "-a", "--reflink=always", src, dst]
         else:
@@ -653,9 +669,7 @@ if dry:
 verbose = args.verbose
 if args.multi:
     args.mlogs = 1
-if args.config:
-    configfile = args.config
-config = load_config(configfile)
+config = load_config(args.config)
 logfile = config["DEFAULT"]["logfile"]
 logdir = os.path.dirname(logfile) + "/psnap/"
 open_logfile()
