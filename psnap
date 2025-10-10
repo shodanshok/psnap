@@ -206,8 +206,9 @@ def rotate(host, reflink):
     prev_rotate = 0
     snapdir = get_snapdir(host)
     curr_interval = args.interval
+    curr_count = int(config[host][curr_interval])
     # if resync, skip rotation
-    if args.resync:
+    if args.resync or curr_count == 1:
         dst = snapdir + curr_interval + ".0"
         create_dir(dst)
         create_dir(dst + "/data")
@@ -215,7 +216,6 @@ def rotate(host, reflink):
         execute(cmd)
         return 2
     # identify latest previous interval snapshot
-    curr_count = int(config[host][curr_interval])
     index = intervals.index(curr_interval)
     if index:
         prev_interval = intervals[index - 1]
