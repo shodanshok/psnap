@@ -223,7 +223,6 @@ def rotate(host, reflink):
     else:
         prev_interval = intervals[index]
         prev_count = 0
-    snaps = range(curr_count - 1, -1, -1)
     # check if latest previous interval snapshot actually exists
     # if so, rotation is needed
     prev_snap = snapdir + prev_interval + "." + str(prev_count - 1)
@@ -232,14 +231,13 @@ def rotate(host, reflink):
             prev_rotate = 1
         else:
             message(prev_snap + " not found, nothing to do")
+            return 1
+    snaps = range(curr_count - 1, -1, -1)
     for snap in snaps:
         src = snapdir + curr_interval + "." + str(snap)
         dst = snapdir + curr_interval + "." + str(snap + 1)
         # skip non-existing snapshots
         if not os.path.exists(src):
-            continue
-        # skip if prev rotation is not needed
-        if prev_count and not prev_rotate:
             continue
         # remove oldest snapshot
         if snap == curr_count - 1:
