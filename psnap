@@ -197,6 +197,19 @@ def create_dir(dst):
         sys.exit(1)
 
 
+# get previous snapshot
+def get_prev_snap(host, snapdir):
+    """Function returning previous interval snapshot."""
+    curr_interval = args.interval
+    index = intervals.index(curr_interval)
+    if not index:
+        return False
+    prev_interval = intervals[index - 1]
+    prev_count = int(config[host][prev_interval])
+    if not prev_count:
+        return False
+    return snapdir + prev_interval + "." + str(prev_count - 1)
+
 # rotate snapshots
 # return 0 means rotation failed
 # return 1 means rotation only
@@ -215,23 +228,12 @@ def rotate(host, reflink):
         cmd = ["touch", dst]
         execute(cmd)
         return 2
-    # identify latest previous interval snapshot
-    index = intervals.index(curr_interval)
-    if index:
-        prev_interval = intervals[index - 1]
-        prev_count = int(config[host][prev_interval])
-    else:
-        prev_interval = intervals[index]
-        prev_count = 0
+    prev_snap = get_prev_snap(host, snapdir)
     # check if latest previous interval snapshot actually exists
-    # if so, rotation is needed
-    prev_snap = snapdir + prev_interval + "." + str(prev_count - 1)
-    if prev_count:
-        if os.path.exists(prev_snap):
-            prev_rotate = 1
-        else:
-            message(prev_snap + " not found, nothing to do")
-            return 1
+    prev_snap = get_prev_snap(host, snapdir)
+    if prev_snap and not os.path.exists(prev_snap):
+        message(prev_snap + " not found, nothing to do")
+        return 1
     snaps = range(curr_count - 1, -1, -1)
     for snap in snaps:
         src = snapdir + curr_interval + "." + str(snap)
@@ -250,14 +252,13 @@ def rotate(host, reflink):
         if result and result.returncode:
             return 0
     # rotate from previous interval snapshot
-    if prev_count:
-        if prev_rotate:
-            src = snapdir + prev_interval + "." + str(prev_count - 1)
-            dst = snapdir + curr_interval + ".0"
-            cmd = ["mv", "-f", src, dst]
-            result = execute(cmd)
-            if result and result.returncode:
-                return 0
+    if prev_snap:
+        src = prev_snap
+        dst = snapdir + curr_interval + ".0"
+        cmd = ["mv", "-f", src, dst]
+        result = execute(cmd)
+        if result and result.returncode:
+            return 0
         return 1
     # cp from latest snapshot
     src = snapdir + curr_interval + ".1"
